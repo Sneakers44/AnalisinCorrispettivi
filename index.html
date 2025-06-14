@@ -41,14 +41,15 @@
   <h2>📊 Dashboard corrispettivi Store</h2>
   <input type="file" id="file-input" accept=".xlsx,.xlsm">
   <div id="filters">
-    <label>Inizio periodo:</label>
+    <label for="start-date-filter">Inizio periodo:</label>
     <input type="date" id="start-date-filter">
-    <label>Fine periodo:</label>
+    <label for="end-date-filter">Fine periodo:</label>
     <input type="date" id="end-date-filter">
     <select id="year-filter"></select>
     <select id="insegna-filter"></select>
     <select id="store-filter"></select>
     <button id="apply-btn">Applica filtri</button>
+  </div>
   </div>
   <div id="data-table-section">
     <h3>📋 Corrispettivi Fiscali</h3>
