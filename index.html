@@ -123,10 +123,40 @@ function formatInt(n) { return n.toLocaleString('it-IT'); }
 function excelDateToJSDate(excelDate) { return new Date((excelDate-25569)*86400*1000); }
 
 document.getElementById('file-input').addEventListener('change', e => {
-  const file = e.target.files[0]; if (!file) return;
+  const file = e.target.files[0];
+  if (!file) return;
   const reader = new FileReader();
   reader.onload = evt => {
-    const wb = XLSX.read(new Uint8Array(evt.target.result), { type: 'array' });
+    // Read file as array buffer for better compatibility
+    const data = new Uint8Array(evt.target.result);
+    const wb = XLSX.read(data, { type: 'array' });
+    const sh = wb.Sheets['REPORT CHIUSURA GIORNALIERA'];
+    if (!sh) return alert('Foglio "REPORT CHIUSURA GIORNALIERA" non trovato.');
+    const rows = XLSX.utils.sheet_to_json(sh, { defval: '' });
+    globalData = rows.map(rw => {
+      const d = rw['DATACHIUSURA'];
+      let dt = typeof d === 'number' ? excelDateToJSDate(d) : new Date(d);
+      if (isNaN(dt)) return null;
+      dt.setDate(dt.getDate() + 1);
+      const gg = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      const aa = dt.getFullYear();
+      return {
+        DATA: `${gg}/${mm}/${aa}`,
+        RAWDATE: `${aa}-${mm}-${gg}`,
+        MESE_ANNO: `${mm}/${aa}`,
+        ANNO: `${aa}`,
+        STORE: rw['STORE'],
+        INSEGNA: rw['INSEGNA'],
+        INCASSO: parseFloat(rw['TOTALEGIORNOVENDITE'])||0,
+        SCONTRINI: parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0
+      };
+    }).filter(Boolean);
+    populateFilters(globalData);
+    renderDashboard(globalData);
+  };
+  reader.readAsArrayBuffer(file);
+});
     const sh = wb.Sheets['REPORT CHIUSURA GIORNALIERA']; if (!sh) return;
     const rows = XLSX.utils.sheet_to_json(sh, { defval: '' });
     globalData = rows.map(rw => {
