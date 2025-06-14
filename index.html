@@ -2,30 +2,38 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard corrispettivi Store</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
   <style>
-    /* Responsive mobile-first styling */
-    html, body { width: 100%; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; padding: 10px; font-size: 18px; line-height: 1.4; }
-    h2 { font-size: 2em; margin-bottom: 10px; }
-    #file-input, #filters input, #filters select, #filters button { width: 100%; font-size: 1em; padding: 10px; margin-bottom: 8px; box-sizing: border-box; }
-    #filters { display: none; margin-bottom: 16px; }
-    details.insegna, details.store { margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }
-    details > summary { display: flex; flex-direction: column; padding: 12px; background: #f4f4f4; cursor: pointer; font-size: 1.1em; }
-    details > summary div { display: flex; justify-content: space-between; }
-    details.store > summary { background: #fafafa; }
-    .table-wrapper { overflow-x: auto; margin: 8px 0; }
-    table { width: 100%; border-collapse: collapse; font-size: 1em; }
-    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-    th { background: #ddd; }
-    .total-footer { margin-top: 16px; font-size: 1.2em; font-weight: bold; text-align: center; }
-    @media (min-width: 600px) {
-      #file-input, #filters input, #filters select, #filters button { width: auto; max-width: 300px; margin-right: 8px; }
-      details > summary { flex-direction: row; align-items: center; }
-      details > summary div { width: auto; }
+    html, body { width:100%; margin:0; padding:0; }
+    body { font-family: Arial, sans-serif; padding:10px; font-size:18px; line-height:1.4; }
+    h2 { font-size:2em; margin-bottom:10px; }
+    #file-input, #filters input, #filters select, #filters button { width:100%; font-size:1em; padding:10px; margin-bottom:8px; box-sizing:border-box; }
+    #filters { display:none; margin-bottom:16px; }
+    details.insegna, details.store { margin-bottom:12px; border:1px solid #ccc; border-radius:4px; overflow:hidden; }
+    details > summary {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      padding: 12px;
+      background: #f4f4f4;
+      cursor: pointer;
+      font-size: 1.1em;
+      gap: 10px;
+    }
+    details > summary div { display:flex; justify-content:space-between; }
+    details.store > summary { background:#fafafa; }
+    .table-wrapper { overflow-x:auto; margin:8px 0; }
+    table { width:100%; border-collapse:collapse; font-size:1em; }
+    th, td { border:1px solid #ccc; padding:8px; text-align:left; }
+    th { background:#ddd; }
+    .total-footer { margin-top:16px; font-size:1.2em; font-weight:bold; text-align:center; }
+    @media (min-width:600px) {
+      #file-input, #filters input, #filters select, #filters button { width:auto; max-width:300px; margin-right:8px; }
+      details > summary { flex-direction:row; align-items:center; }
+      details > summary div { width:auto; }
     }
   </style>
 </head>
@@ -33,11 +41,14 @@
   <h2>📊 Dashboard corrispettivi Store</h2>
   <input type="file" id="file-input" accept=".xlsx,.xlsm">
   <div id="filters">
-    <input type="date" id="date-filter">
+    <label>Inizio periodo:</label>
+    <input type="date" id="start-date-filter">
+    <label>Fine periodo:</label>
+    <input type="date" id="end-date-filter">
     <select id="year-filter"></select>
     <select id="insegna-filter"></select>
     <select id="store-filter"></select>
-    <button onclick="applyFilters()">Applica filtri</button>
+    <button id="apply-btn">Applica filtri</button>
   </div>
   <div id="data-table-section">
     <h3>📋 Corrispettivi Fiscali</h3>
@@ -45,147 +56,95 @@
     <div id="grand-total" class="total-footer"></div>
   </div>
   <div id="line-chart"></div>
-
 <script>
 let globalData = [];
-function formatNumber(n) { return n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function formatInt(n) { return n.toLocaleString('it-IT'); }
-function excelDateToJSDate(excelDate) { return new Date((excelDate - 25569) * 86400 * 1000); }
+const formatNumber = n => n.toLocaleString('it-IT', { minimumFractionDigits:2, maximumFractionDigits:2 });
+const formatInt = n => n.toLocaleString('it-IT');
+const excelDateToJSDate = d => new Date((d-25569)*86400*1000);
 
+// Handle file upload
 document.getElementById('file-input').addEventListener('change', e => {
-  const file = e.target.files[0];
-  if (!file) return;
+  const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = evt => {
     const data = new Uint8Array(evt.target.result);
-    const wb = XLSX.read(data, { type: 'array' });
+    const wb = XLSX.read(data, { type:'array' });
     const sh = wb.Sheets['REPORT CHIUSURA GIORNALIERA'];
-    if (!sh) { alert('Foglio "REPORT CHIUSURA GIORNALIERA" non trovato.'); return; }
-    const rows = XLSX.utils.sheet_to_json(sh, { defval: '' });
+    if (!sh) { alert('Foglio non trovato'); return; }
+    const rows = XLSX.utils.sheet_to_json(sh, { defval:'' });
     globalData = rows.map(rw => {
-      const d = rw['DATACORRISPETTIVO'] || rw['DATACHIUSURA'];
-      let dt;
-      if (typeof d === 'number') dt = excelDateToJSDate(d);
-      else if (typeof d === 'string' && d.includes('/')) {
-        const [dd, mm, yyyy] = d.split('/').map(n=>parseInt(n,10));
-        dt = new Date(yyyy, mm-1, dd);
-      } else dt = new Date(d);
+      const raw = rw['DATACORRISPETTIVO']||rw['DATACHIUSURA'];
+      let dt = typeof raw==='number'?excelDateToJSDate(raw):
+               raw.includes('/')?( () => { const p=raw.split('/').map(Number); return new Date(p[2],p[1]-1,p[0]); })():new Date(raw);
       if (isNaN(dt)) return null;
-      dt.setDate(dt.getDate() + 1);
-      const gg = String(dt.getDate()).padStart(2,'0');
-      const mmv = String(dt.getMonth()+1).padStart(2,'0');
-      const aa = dt.getFullYear();
-      return {
-        DATA: `${gg}/${mmv}/${aa}`,
-        RAWDATE: `${aa}-${mmv}-${gg}`,
-        MESE_ANNO: `${mmv}/${aa}`,
-        ANNO: `${aa}`,
-        STORE: rw['STORE'],
-        INSEGNA: rw['INSEGNA'],
-        INCASSO: parseFloat(rw['TOTALEGIORNOVENDITE']) || 0,
-        SCONTRINI: parseInt(rw['NUMERODOCUMENTICOMMERCIALI']) || 0
-      };
+      dt.setDate(dt.getDate()+1);
+      const dd=String(dt.getDate()).padStart(2,'0'), mm=String(dt.getMonth()+1).padStart(2,'0'), yy=dt.getFullYear();
+      return { DATA:`${dd}/${mm}/${yy}`, RAWDATE:`${yy}-${mm}-${dd}`, MESE_ANNO:`${mm}/${yy}`, ANNO:`${yy}`, STORE:rw['STORE'], INSEGNA:rw['INSEGNA'], INCASSO:parseFloat(rw['TOTALEGIORNOVENDITE'])||0, SCONTRINI:parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0 };
     }).filter(Boolean);
-    showUI(globalData);
+    showUI();
   };
-  if (reader.readAsArrayBuffer) reader.readAsArrayBuffer(file);
-  else if (reader.readAsBinaryString) reader.readAsBinaryString(file);
-  else alert('FileReader non supporta il formato necessario.');
+  reader.readAsArrayBuffer(file);
 });
 
-function showUI(data) {
-  document.getElementById('filters').style.display = 'block';
-  populateFilters(data);
-  renderDashboard(data);
+function showUI() {
+  document.getElementById('filters').style.display='block';
+  populateFilters();
+  applyFilters();
 }
 
-function populateFilters(data) {
-  const years = [...new Set(data.map(d=>d.ANNO))].sort();
-  const insegne = [...new Set(data.map(d=>d.INSEGNA))].sort();
-  const stores = [...new Set(data.map(d=>d.STORE))].sort();
-  document.getElementById('year-filter').innerHTML = '<option value="">Anno</option>' + years.map(y=>`<option>${y}</option>`).join('');
-  document.getElementById('insegna-filter').innerHTML = '<option value="">Insegna</option>' + insegne.map(i=>`<option>${i}</option>`).join('');
-  document.getElementById('store-filter').innerHTML = '<option value="">Store</option>' + stores.map(s=>`<option>${s}</option>`).join('');
-  document.getElementById('insegna-filter').addEventListener('change', ()=>{
+function populateFilters() {
+  const years = [...new Set(globalData.map(d=>d.ANNO))].sort();
+  const insegne = [...new Set(globalData.map(d=>d.INSEGNA))].sort();
+  const stores = [...new Set(globalData.map(d=>d.STORE))].sort();
+  document.getElementById('year-filter').innerHTML='<option value="">Anno</option>'+years.map(y=>`<option>${y}</option>`).join('');
+  document.getElementById('insegna-filter').innerHTML='<option value="">Insegna</option>'+insegne.map(i=>`<option>${i}</option>`).join('');
+  document.getElementById('store-filter').innerHTML='<option value="">Store</option>'+stores.map(s=>`<option>${s}</option>`).join('');
+  document.getElementById('insegna-filter').onchange = () => {
     const sel = document.getElementById('insegna-filter').value;
-    const filt = sel ? data.filter(d=>d.INSEGNA===sel) : data;
-    const sts = [...new Set(filt.map(d=>d.STORE))].sort();
-    document.getElementById('store-filter').innerHTML = '<option value="">Store</option>' + sts.map(s=>`<option>${s}</option>`).join('');
-  });
+    const fl = sel?globalData.filter(d=>d.INSEGNA===sel):globalData;
+    const sts=[...new Set(fl.map(d=>d.STORE))].sort();
+    document.getElementById('store-filter').innerHTML='<option value="">Store</option>'+sts.map(s=>`<option>${s}</option>`).join('');
+  };
 }
 
 function applyFilters() {
-  const df = document.getElementById('date-filter').value;
+  const sd = document.getElementById('start-date-filter').value;
+  const ed = document.getElementById('end-date-filter').value;
   const yf = document.getElementById('year-filter').value;
   const inf = document.getElementById('insegna-filter').value;
   const sf = document.getElementById('store-filter').value;
-  const filtered = globalData.filter(d =>
-    (!df || d.RAWDATE === df) &&
-    (!yf || d.ANNO == yf) &&
-    (!inf || d.INSEGNA === inf) &&
-    (!sf || d.STORE === sf)
-  );
-  renderDashboard(filtered);
-}
-
-function renderDashboard(data) {
+  const data = globalData.filter(d=>{
+    return (!sd||d.RAWDATE>=sd)&&(!ed||d.RAWDATE<=ed)&&(!yf||d.ANNO===yf)&&(!inf||d.INSEGNA===inf)&&(!sf||d.STORE===sf);
+  });
   renderTable(data);
   renderLineChart(data);
 }
 
+// Attach apply to button
+document.getElementById('apply-btn').onclick=applyFilters;
+
 function renderTable(data) {
-  const container = document.getElementById('data-table');
-  const footer = document.getElementById('grand-total');
-  container.innerHTML = '';
-  let totInc = 0, totDoc = 0;
-  const grouped = {};
-  data.forEach(r=>{
-    grouped[r.INSEGNA] = grouped[r.INSEGNA] || {};
-    grouped[r.INSEGNA][r.STORE] = grouped[r.INSEGNA][r.STORE] || [];
-    grouped[r.INSEGNA][r.STORE].push(r);
-    totInc += r.INCASSO;
-    totDoc += r.SCONTRINI;
-  });
-  Object.entries(grouped).forEach(([ins, stores])=>{
-    const dIns = document.createElement('details'); dIns.className='insegna';
-    const sumIns = Object.values(stores).flat().reduce((s,r)=>s+r.INCASSO,0);
-    const docIns = Object.values(stores).flat().reduce((s,r)=>s+r.SCONTRINI,0);
-    dIns.innerHTML = `<summary><div><strong>${ins}</strong></div><div>🧾 ${formatInt(docIns)}</div><div>💶 ${formatNumber(sumIns)}</div></summary>`;
-    Object.entries(stores).forEach(([st, rows])=>{
-      const dSt = document.createElement('details'); dSt.className='store';
-      const sumSt = rows.reduce((s,r)=>s+r.INCASSO,0);
-      const docSt = rows.reduce((s,r)=>s+r.SCONTRINI,0);
-      dSt.innerHTML = `<summary><div><strong>${st}</strong></div><div>🧾 ${formatInt(docSt)}</div><div>💶 ${formatNumber(sumSt)}</div></summary>`;
-      const wrapper = document.createElement('div'); wrapper.className='table-wrapper';
-      const tbl = document.createElement('table');
-      tbl.innerHTML = `<thead><tr><th>Data</th><th>Scontrini</th><th>Incasso</th></tr></thead><tbody></tbody>`;
-      rows.forEach(r=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${r.DATA}</td><td>${formatInt(r.SCONTRINI)}</td><td>€ ${formatNumber(r.INCASSO)}</td>`;
-        tbl.querySelector('tbody').appendChild(tr);
-      });
-      wrapper.appendChild(tbl);
-      dSt.appendChild(wrapper);
-      dIns.appendChild(dSt);
-    });
-    container.appendChild(dIns);
-  });
-  footer.innerHTML = `<div><strong>Totale generale</strong></div><div>🧾 ${formatInt(totDoc)}</div><div>💶 ${formatNumber(totInc)}</div>`;
+  const ct=document.getElementById('data-table'); const ft=document.getElementById('grand-total');
+  ct.innerHTML=''; let ti=0, td=0;
+  const g={}; data.forEach(r=>{g[r.INSEGNA]=g[r.INSEGNA]||{}; g[r.INSEGNA][r.STORE]=g[r.INSEGNA][r.STORE]||[]; g[r.INSEGNA][r.STORE].push(r); ti+=r.INCASSO; td+=r.SCONTRINI;});
+  Object.entries(g).forEach(([ins,st])=>{
+    const di=document.createElement('details'); di.className='insegna'; const si=Object.values(st).flat().reduce((s,r)=>s+r.INCASSO,0); const dii=Object.values(st).flat().reduce((s,r)=>s+r.SCONTRINI,0);
+    di.innerHTML=`<summary><div><strong>${ins}</strong></div><div>🧾 ${formatInt(dii)}</div><div>💶 ${formatNumber(si)}</div></summary>`;
+    Object.entries(st).forEach(([s,rows])=>{
+      const ds=document.createElement('details'); ds.className='store'; const ss=rows.reduce((s,r)=>s+r.INCASSO,0); const dss=rows.reduce((s,r)=>s+r.SCONTRINI,0);
+      ds.innerHTML=`<summary><div><strong>${s}</strong></div><div>🧾 ${formatInt(dss)}</div><div>💶 ${formatNumber(ss)}</div></summary>`;
+      const wrapper=document.createElement('div'); wrapper.className='table-wrapper'; const tbl=document.createElement('table'); tbl.innerHTML=`<thead><tr><th>Data</th><th>Scontrini</th><th>Incasso</th></tr></thead><tbody></tbody>`;
+      rows.forEach(r=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${r.DATA}</td><td>${formatInt(r.SCONTRINI)}</td><td>€ ${formatNumber(r.INCASSO)}</td>`; tbl.querySelector('tbody').appendChild(tr);});
+      wrapper.appendChild(tbl); ds.appendChild(wrapper); di.appendChild(ds);
+    }); ct.appendChild(di);
+  }); ft.innerHTML=`<div><strong>Totale generale</strong></div><div>🧾 ${formatInt(td)}</div><div>💶 ${formatNumber(ti)}</div>`;
 }
 
 function renderLineChart(data) {
-  const byYear = {};
-  data.forEach(r=>{
-    byYear[r.ANNO] = byYear[r.ANNO] || {};
-    byYear[r.ANNO][r.MESE_ANNO] = (byYear[r.ANNO][r.MESE_ANNO] || 0) + r.INCASSO;
-  });
-  const months = [...new Set(Object.values(byYear).flatMap(Object.keys))]
-    .sort((a,b)=>{
-      const [ma,ya]=a.split('/').map(Number),[mb,yb]=b.split('/').map(Number);
-      return new Date(ya,ma-1)-new Date(yb,mb-1);
-    });
-  const traces = Object.entries(byYear).map(([yr, obj])=>({ x: months, y: months.map(m=>obj[m]||0), mode:'lines+markers', name:yr }));
-  Plotly.newPlot('line-chart', traces, { responsive:true, title:'Andamento Mensile Incassi per Anno', xaxis:{title:'Mese/Anno'}, yaxis:{title:'Incasso'} });
+  const byY={}; data.forEach(r=>{byY[r.ANNO]=byY[r.ANNO]||{}; byY[r.ANNO][r.MESE_ANNO]=(byY[r.ANNO][r.MESE_ANNO]||0)+r.INCASSO;});
+  const mths=[...new Set(Object.values(byY).flatMap(Object.keys))].sort((a,b)=>{const[ma,ya]=a.split('/').map(Number),[mb,yb]=b.split('/').map(Number);return new Date(ya,ma-1)-new Date(yb,mb-1);});
+  const trs=Object.entries(byY).map(([yr,obj])=>({ x:mths, y:mths.map(m=>obj[m]||0), mode:'lines+markers', name:yr }));
+  Plotly.newPlot('line-chart', trs, {responsive:true, title:'Andamento Mensile Incassi per Anno', xaxis:{title:'Mese/Anno'}, yaxis:{title:'Incasso'}});
 }
 </script>
 </body>
