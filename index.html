@@ -60,6 +60,47 @@
     .kpi-card p span:last-child {
         font-weight: bold;
     }
+    
+    .analysis-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-top: 16px;
+    }
+    .perf-table-container h4 {
+        margin-top: 0;
+    }
+    .perf-table {
+        font-size: 0.9em;
+    }
+    #yoy-container, #dod-container {
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        background: #fff;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .yoy-value, .dod-value {
+        font-size: 2em;
+        font-weight: bold;
+    }
+    .yoy-growth, .dod-growth { color: #28a745; }
+    .yoy-decline, .dod-decline { color: #dc3545; }
+    .yoy-nodata, .dod-nodata { font-size: 1em; color: #6c757d; }
+    
+    #error-container {
+        color: #721c24;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 10px;
+        display: none; /* Nascosto di default */
+    }
+
+    @media (max-width: 768px) {
+        .analysis-container { grid-template-columns: 1fr; }
+    }
 
     @media (min-width:600px) {
       #file-input, #filters input, #filters select, #filters button { width:auto; max-width:300px; margin-right:8px; }
@@ -70,6 +111,10 @@
 </head>
 <body>
   <h2>📊 Dashboard corrispettivi Store</h2>
+  
+  <!-- Contenitore per i messaggi di errore -->
+  <div id="error-container"></div>
+
   <input type="file" id="file-input" accept=".xlsx,.xlsm">
   <div id="filters">
     <label for="start-date-filter">Inizio periodo:</label>
@@ -88,15 +133,36 @@
     <div id="grand-total" class="total-footer"></div>
   </div>
   
+  <div id="dod-section">
+      <h3>📊 Variazione Giorno Precedente</h3>
+      <div id="dod-container"></div>
+  </div>
+
   <div id="charts-section">
       <h3>📈 Grafici di Andamento</h3>
       <div id="line-chart"></div>
       <div id="daily-line-chart" style="margin-top: 40px;"></div>
+      <div id="day-of-week-chart" style="margin-top: 40px;"></div>
   </div>
 
   <div id="kpi-section">
       <h3>💡 Analisi KPI per Store</h3>
       <div id="kpi-container"></div>
+  </div>
+
+  <div id="extra-analysis-section">
+      <h3>⭐ Analisi Aggiuntive</h3>
+      <div id="yoy-section">
+          <h4>Confronto Anno su Anno</h4>
+          <div id="yoy-container"></div>
+      </div>
+      <div id="top-flop-section" style="margin-top: 20px;">
+          <h4>Giorni Eccezionali</h4>
+          <div class="analysis-container">
+              <div id="top-days-container" class="perf-table-container"></div>
+              <div id="flop-days-container" class="perf-table-container"></div>
+          </div>
+      </div>
   </div>
 
 <script>
@@ -105,24 +171,56 @@ let globalData = [];
 const formatCurrency = n => n.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' });
 const formatNumber = n => n.toLocaleString('it-IT', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const formatInt = n => n.toLocaleString('it-IT');
-const excelDateToJSDate = d => new Date((d-25569)*86400*1000);
 
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = evt => {
+    // MODIFICA: Nasconde il box di errore all'inizio di ogni caricamento
+    const errorContainer = document.getElementById('error-container');
+    errorContainer.style.display = 'none';
+    errorContainer.textContent = '';
+
     const data = new Uint8Array(evt.target.result);
     const wb = XLSX.read(data, { type:'array' });
-    const sh = wb.Sheets['REPORT CHIUSURA GIORNALIERA'];
-    if (!sh) { alert('Foglio "REPORT CHIUSURA GIORNALIERA" non trovato'); return; }
+    const sheetName = 'REPORT CHIUSURA GIORNALIERA';
+    const sh = wb.Sheets[sheetName];
+    if (!sh) {
+      // MODIFICA: Mostra l'errore sulla pagina invece di usare alert()
+      errorContainer.textContent = `Errore: Foglio "${sheetName}" non trovato nel file Excel.`;
+      errorContainer.style.display = 'block';
+      return; 
+    }
+    
     const rows = XLSX.utils.sheet_to_json(sh, { defval:'' });
     
+    const giorniSettimana = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+    
     globalData = rows.map(rw => {
-      const raw = rw['DATACORRISPETTIVO']||rw['DATACHIUSURA'];
-      let dt = typeof raw==='number'?excelDateToJSDate(raw):
-               raw.includes('/')?( () => { const p=raw.split('/').map(Number); return new Date(p[2],p[1]-1,p[0]); })():new Date(raw);
-      if (isNaN(dt)) return null;
-      dt.setDate(dt.getDate()+1);
+      let dt;
+      const rawDate = rw['DATACORRISPETTIVO'];
+
+      if (rawDate instanceof Date) {
+          dt = rawDate;
+      } else if (typeof rawDate === 'number' && rawDate > 1) {
+          dt = new Date((rawDate - 25569) * 86400 * 1000);
+      } else if (typeof rawDate === 'string') {
+          const parts = rawDate.split(/[-/]/);
+          if (parts.length === 3) {
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1;
+            const year = parseInt(parts[2], 10);
+            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+               dt = new Date(year, month, day);
+            }
+          }
+      }
+
+      if (!dt || isNaN(dt.getTime())) {
+        console.warn("Riga saltata: 'DATACORRISPETTIVO' non è una data valida.", rw);
+        return null;
+      }
+      
       const dd=String(dt.getDate()).padStart(2,'0'), mm=String(dt.getMonth()+1).padStart(2,'0'), yy=dt.getFullYear();
       return { 
         DATA: `${dd}/${mm}/${yy}`, 
@@ -132,9 +230,18 @@ document.getElementById('file-input').addEventListener('change', e => {
         STORE: rw['STORE'], 
         INSEGNA: rw['INSEGNA'], 
         INCASSO: parseFloat(rw['TOTALEGIORNOVENDITE'])||0, 
-        SCONTRINI: parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0 
+        SCONTRINI: parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0,
+        GIORNO_SETTIMANA_INDICE: dt.getDay(),
+        GIORNO_SETTIMANA_NOME: giorniSettimana[dt.getDay()]
       };
     }).filter(Boolean);
+    
+    if(globalData.length === 0) {
+        // MODIFICA: Mostra l'errore sulla pagina invece di usare alert()
+        errorContainer.textContent = "Nessun dato valido trovato nel file. Controlla che la colonna 'DATACORRISPETTIVO' sia presente e contenga date corrette.";
+        errorContainer.style.display = 'block';
+    }
+
     showUI();
   };
   reader.readAsArrayBuffer(file);
@@ -163,23 +270,67 @@ function populateFilters() {
 }
 
 function applyFilters() {
-  const sd = document.getElementById('start-date-filter').value;
-  const ed = document.getElementById('end-date-filter').value;
-  const yf = document.getElementById('year-filter').value;
-  const inf = document.getElementById('insegna-filter').value;
-  const sf = document.getElementById('store-filter').value;
+  const filters = {
+    sd: document.getElementById('start-date-filter').value,
+    ed: document.getElementById('end-date-filter').value,
+    yf: document.getElementById('year-filter').value,
+    inf: document.getElementById('insegna-filter').value,
+    sf: document.getElementById('store-filter').value,
+  }
   
   const data = globalData.filter(d=>{
-    return (!sd||d.RAWDATE>=sd)&&(!ed||d.RAWDATE<=ed)&&(!yf||d.ANNO===yf)&&(!inf||d.INSEGNA===inf)&&(!sf||d.STORE===sf);
+    return (!filters.sd||d.RAWDATE>=filters.sd)&&(!filters.ed||d.RAWDATE<=filters.ed)&&(!filters.yf||d.ANNO===filters.yf)&&(!filters.inf||d.INSEGNA===filters.inf)&&(!filters.sf||d.STORE===filters.sf);
   });
   
   renderTable(data);
+  renderDayOverDayComparison(data);
   renderLineChart(data);
   renderDailyLineChart(data);
+  renderDayOfWeekChart(data);
   renderKpiSection(data);
+  renderTopFlopDays(data);
+  renderYoYComparison(filters);
 }
 
 document.getElementById('apply-btn').onclick=applyFilters;
+
+function renderDayOverDayComparison(data) {
+    const container = document.getElementById('dod-container');
+    container.innerHTML = '';
+
+    const byDay = {};
+    data.forEach(r => { byDay[r.RAWDATE] = (byDay[r.RAWDATE] || 0) + r.INCASSO; });
+    const sortedDates = Object.keys(byDay).sort();
+
+    if (sortedDates.length < 2) {
+        container.innerHTML = `<p class="dod-nodata">Dati insufficienti per il confronto (servono almeno 2 giorni).</p>`;
+        return;
+    }
+
+    const lastDayDate = sortedDates[sortedDates.length - 1];
+    const prevDayDate = sortedDates[sortedDates.length - 2];
+    const lastDayTotal = byDay[lastDayDate];
+    const prevDayTotal = byDay[prevDayDate];
+    
+    const formattedLastDate = new Date(lastDayDate + 'T00:00:00').toLocaleDateString('it-IT');
+    const formattedPrevDate = new Date(prevDayDate + 'T00:00:00').toLocaleDateString('it-IT');
+
+    if (prevDayTotal === 0) {
+        container.innerHTML = `<p class="dod-nodata">L'incasso del giorno precedente (${formattedPrevDate}) è zero, impossibile calcolare la variazione.</p>
+                               <p>Incasso del ${formattedLastDate}: ${formatCurrency(lastDayTotal)}</p>`;
+        return;
+    }
+
+    const percentageChange = ((lastDayTotal - prevDayTotal) / prevDayTotal) * 100;
+    const changeClass = percentageChange >= 0 ? 'dod-growth' : 'dod-decline';
+    const sign = percentageChange >= 0 ? '+' : '';
+
+    container.innerHTML = `
+        <p class="dod-value ${changeClass}">${sign}${percentageChange.toFixed(2)}%</p>
+        <p>Incasso del ${formattedLastDate}: ${formatCurrency(lastDayTotal)}</p>
+        <p>vs Giorno Precedente (${formattedPrevDate}): ${formatCurrency(prevDayTotal)}</p>
+    `;
+}
 
 function renderTable(data) {
   const ct=document.getElementById('data-table'); const ft=document.getElementById('grand-total');
@@ -218,48 +369,106 @@ function renderDailyLineChart(data) {
 
 function renderKpiSection(data) {
     const container = document.getElementById('kpi-container');
-    container.innerHTML = ''; // Pulisce i risultati precedenti
-
-    // Raggruppa i dati per negozio
+    container.innerHTML = '';
     const byStore = {};
     data.forEach(row => {
-        if (!byStore[row.STORE]) {
-            byStore[row.STORE] = {
-                incassoTotale: 0,
-                scontriniTotali: 0,
-                giorniAttivita: new Set()
-            };
-        }
+        if (!byStore[row.STORE]) { byStore[row.STORE] = { incassoTotale: 0, scontriniTotali: 0, giorniAttivita: new Set() }; }
         byStore[row.STORE].incassoTotale += row.INCASSO;
         byStore[row.STORE].scontriniTotali += row.SCONTRINI;
         byStore[row.STORE].giorniAttivita.add(row.RAWDATE);
     });
-
-    // MODIFICA: Converte l'oggetto in un array e lo ordina per incasso totale decrescente
     const sortedStores = Object.entries(byStore).sort(([, a], [, b]) => b.incassoTotale - a.incassoTotale);
-
-    // Itera sull'array ordinato per calcolare i KPI e creare le card
     for (const [storeName, storeData] of sortedStores) {
         const { incassoTotale, scontriniTotali } = storeData;
         const numGiorniAttivita = storeData.giorniAttivita.size;
-
-        // Calcola i KPI, gestendo divisioni per zero
         const scontrinoMedio = scontriniTotali > 0 ? incassoTotale / scontriniTotali : 0;
         const incassoMedioGiornaliero = numGiorniAttivita > 0 ? incassoTotale / numGiorniAttivita : 0;
-
-        // Crea la card HTML
         const card = document.createElement('div');
         card.className = 'kpi-card';
-        card.innerHTML = `
-            <h4>${storeName}</h4>
-            <p><span>Incasso Totale:</span> <span>${formatCurrency(incassoTotale)}</span></p>
-            <p><span>Scontrino Medio:</span> <span>${formatCurrency(scontrinoMedio)}</span></p>
-            <p><span>Giorni di Attività:</span> <span>${numGiorniAttivita}</span></p>
-            <p><span>Incasso Medio Giornaliero:</span> <span>${formatCurrency(incassoMedioGiornaliero)}</span></p>
-        `;
+        card.innerHTML = `<h4>${storeName}</h4><p><span>Incasso Totale:</span> <span>${formatCurrency(incassoTotale)}</span></p><p><span>Scontrino Medio:</span> <span>${formatCurrency(scontrinoMedio)}</span></p><p><span>Giorni di Attività:</span> <span>${numGiorniAttivita}</span></p><p><span>Incasso Medio Giornaliero:</span> <span>${formatCurrency(incassoMedioGiornaliero)}</span></p>`;
         container.appendChild(card);
     }
 }
+
+function renderDayOfWeekChart(data) {
+    const container = document.getElementById('day-of-week-chart');
+    if (data.length === 0) { Plotly.purge(container); return; }
+    const totalsByDay = [ { day: 'Lunedì', total: 0 }, { day: 'Martedì', total: 0 }, { day: 'Mercoledì', total: 0 }, { day: 'Giovedì', total: 0 }, { day: 'Venerdì', total: 0 }, { day: 'Sabato', total: 0 }, { day: 'Domenica', total: 0 } ];
+    data.forEach(row => { const index = row.GIORNO_SETTIMANA_INDICE === 0 ? 6 : row.GIORNO_SETTIMANA_INDICE - 1; totalsByDay[index].total += row.INCASSO; });
+    const trace = { x: totalsByDay.map(d => d.day), y: totalsByDay.map(d => d.total), type: 'bar', marker: { color: '#28a745' } };
+    const layout = { responsive: true, title: 'Incasso Totale per Giorno della Settimana', xaxis: { title: 'Giorno della Settimana' }, yaxis: { title: 'Incasso Totale' } };
+    Plotly.newPlot(container, [trace], layout);
+}
+
+function renderTopFlopDays(data) {
+    const topContainer = document.getElementById('top-days-container');
+    const flopContainer = document.getElementById('flop-days-container');
+    topContainer.innerHTML = '';
+    flopContainer.innerHTML = '';
+
+    if (data.length < 5) return;
+
+    const byDay = {};
+    data.forEach(r => { byDay[r.RAWDATE] = (byDay[r.RAWDATE] || 0) + r.INCASSO; });
+
+    const sortedDays = Object.entries(byDay).sort(([, a], [, b]) => b - a);
+
+    const top5 = sortedDays.slice(0, 5);
+    const flop5 = sortedDays.slice(-5).reverse();
+
+    const createTable = (title, days) => {
+        let tableHTML = `<h4>${title}</h4><table class="perf-table"><thead><tr><th>Data</th><th>Incasso</th></tr></thead><tbody>`;
+        days.forEach(([date, total]) => {
+            const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('it-IT');
+            tableHTML += `<tr><td>${formattedDate}</td><td>${formatCurrency(total)}</td></tr>`;
+        });
+        tableHTML += '</tbody></table>';
+        return tableHTML;
+    };
+
+    topContainer.innerHTML = createTable('Top 5 Giorni per Incasso', top5);
+    flopContainer.innerHTML = createTable('Flop 5 Giorni per Incasso', flop5);
+}
+
+function renderYoYComparison(filters) {
+    const container = document.getElementById('yoy-container');
+    const { sd, ed, inf, sf } = filters;
+
+    if (!sd || !ed) {
+        container.innerHTML = `<p class="yoy-nodata">Seleziona un intervallo di date per il confronto.</p>`;
+        return;
+    }
+
+    const currentData = globalData.filter(d => (d.RAWDATE >= sd && d.RAWDATE <= ed) && (!inf || d.INSEGNA === inf) && (!sf || d.STORE === sf));
+    const currentTotal = currentData.reduce((sum, r) => sum + r.INCASSO, 0);
+
+    const prev_sd_date = new Date(sd + 'T00:00:00');
+    prev_sd_date.setFullYear(prev_sd_date.getFullYear() - 1);
+    const prev_ed_date = new Date(ed + 'T00:00:00');
+    prev_ed_date.setFullYear(prev_ed_date.getFullYear() - 1);
+    
+    const prev_sd = prev_sd_date.toISOString().split('T')[0];
+    const prev_ed = prev_ed_date.toISOString().split('T')[0];
+
+    const prevData = globalData.filter(d => (d.RAWDATE >= prev_sd && d.RAWDATE <= prev_ed) && (!inf || d.INSEGNA === inf) && (!sf || d.STORE === sf));
+    const prevTotal = prevData.reduce((sum, r) => sum + r.INCASSO, 0);
+    
+    if (prevTotal === 0) {
+        container.innerHTML = `<p class="yoy-nodata">Nessun dato disponibile per il periodo precedente.</p><p>Incasso corrente: ${formatCurrency(currentTotal)}</p>`;
+        return;
+    }
+
+    const percentageChange = ((currentTotal - prevTotal) / prevTotal) * 100;
+    const changeClass = percentageChange >= 0 ? 'yoy-growth' : 'yoy-decline';
+    const sign = percentageChange >= 0 ? '+' : '';
+
+    container.innerHTML = `
+        <p class="yoy-value ${changeClass}">${sign}${percentageChange.toFixed(2)}%</p>
+        <p>Periodo Corrente: ${formatCurrency(currentTotal)}</p>
+        <p>Periodo Precedente: ${formatCurrency(prevTotal)}</p>
+    `;
+}
+
 </script>
 </body>
 </html>
