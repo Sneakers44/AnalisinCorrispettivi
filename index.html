@@ -57,13 +57,20 @@
     <div id="grand-total" class="total-footer"></div>
   </div>
   <div id="line-chart"></div>
+
+  <!-- NUOVA AGGIUNTA: Contenitore per il grafico giornaliero -->
+  <div id="daily-line-chart" style="margin-top: 40px;"></div>
+
 <script>
+// Variabile per memorizzare i dati globali del file Excel
 let globalData = [];
+
+// Funzioni di formattazione per numeri e date
 const formatNumber = n => n.toLocaleString('it-IT', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const formatInt = n => n.toLocaleString('it-IT');
 const excelDateToJSDate = d => new Date((d-25569)*86400*1000);
 
-// Handle file upload
+// Gestisce il caricamento del file
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
@@ -71,8 +78,10 @@ document.getElementById('file-input').addEventListener('change', e => {
     const data = new Uint8Array(evt.target.result);
     const wb = XLSX.read(data, { type:'array' });
     const sh = wb.Sheets['REPORT CHIUSURA GIORNALIERA'];
-    if (!sh) { alert('Foglio non trovato'); return; }
+    if (!sh) { alert('Foglio "REPORT CHIUSURA GIORNALIERA" non trovato'); return; }
     const rows = XLSX.utils.sheet_to_json(sh, { defval:'' });
+    
+    // Elabora e pulisce i dati dal foglio Excel
     globalData = rows.map(rw => {
       const raw = rw['DATACORRISPETTIVO']||rw['DATACHIUSURA'];
       let dt = typeof raw==='number'?excelDateToJSDate(raw):
@@ -80,19 +89,30 @@ document.getElementById('file-input').addEventListener('change', e => {
       if (isNaN(dt)) return null;
       dt.setDate(dt.getDate()+1);
       const dd=String(dt.getDate()).padStart(2,'0'), mm=String(dt.getMonth()+1).padStart(2,'0'), yy=dt.getFullYear();
-      return { DATA:`${dd}/${mm}/${yy}`, RAWDATE:`${yy}-${mm}-${dd}`, MESE_ANNO:`${mm}/${yy}`, ANNO:`${yy}`, STORE:rw['STORE'], INSEGNA:rw['INSEGNA'], INCASSO:parseFloat(rw['TOTALEGIORNOVENDITE'])||0, SCONTRINI:parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0 };
-    }).filter(Boolean);
+      return { 
+        DATA: `${dd}/${mm}/${yy}`, 
+        RAWDATE: `${yy}-${mm}-${dd}`, // Formato utile per l'ordinamento
+        MESE_ANNO: `${mm}/${yy}`, 
+        ANNO: `${yy}`, 
+        STORE: rw['STORE'], 
+        INSEGNA: rw['INSEGNA'], 
+        INCASSO: parseFloat(rw['TOTALEGIORNOVENDITE'])||0, 
+        SCONTRINI: parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0 
+      };
+    }).filter(Boolean); // Rimuove eventuali righe nulle
     showUI();
   };
   reader.readAsArrayBuffer(file);
 });
 
+// Mostra i filtri e avvia la prima visualizzazione dei dati
 function showUI() {
   document.getElementById('filters').style.display='block';
   populateFilters();
   applyFilters();
 }
 
+// Popola i menu a tendina dei filtri con i valori unici dal file
 function populateFilters() {
   const years = [...new Set(globalData.map(d=>d.ANNO))].sort();
   const insegne = [...new Set(globalData.map(d=>d.INSEGNA))].sort();
@@ -100,6 +120,8 @@ function populateFilters() {
   document.getElementById('year-filter').innerHTML='<option value="">Anno</option>'+years.map(y=>`<option>${y}</option>`).join('');
   document.getElementById('insegna-filter').innerHTML='<option value="">Insegna</option>'+insegne.map(i=>`<option>${i}</option>`).join('');
   document.getElementById('store-filter').innerHTML='<option value="">Store</option>'+stores.map(s=>`<option>${s}</option>`).join('');
+  
+  // Aggiorna dinamicamente gli store in base all'insegna selezionata
   document.getElementById('insegna-filter').onchange = () => {
     const sel = document.getElementById('insegna-filter').value;
     const fl = sel?globalData.filter(d=>d.INSEGNA===sel):globalData;
@@ -108,22 +130,27 @@ function populateFilters() {
   };
 }
 
+// Applica i filtri selezionati e aggiorna la visualizzazione
 function applyFilters() {
   const sd = document.getElementById('start-date-filter').value;
   const ed = document.getElementById('end-date-filter').value;
   const yf = document.getElementById('year-filter').value;
   const inf = document.getElementById('insegna-filter').value;
   const sf = document.getElementById('store-filter').value;
+  
   const data = globalData.filter(d=>{
     return (!sd||d.RAWDATE>=sd)&&(!ed||d.RAWDATE<=ed)&&(!yf||d.ANNO===yf)&&(!inf||d.INSEGNA===inf)&&(!sf||d.STORE===sf);
   });
+  
   renderTable(data);
   renderLineChart(data);
+  renderDailyLineChart(data); // NUOVA AGGIUNTA: Chiamata alla funzione del nuovo grafico
 }
 
-// Attach apply to button
+// Associa la funzione di filtraggio al pulsante
 document.getElementById('apply-btn').onclick=applyFilters;
 
+// Renderizza la tabella dettagliata con i dati
 function renderTable(data) {
   const ct=document.getElementById('data-table'); const ft=document.getElementById('grand-total');
   ct.innerHTML=''; let ti=0, td=0;
@@ -141,11 +168,54 @@ function renderTable(data) {
   }); ft.innerHTML=`<div><strong>Totale generale</strong></div><div>🧾 ${formatInt(td)}</div><div>💶 ${formatNumber(ti)}</div>`;
 }
 
+// Renderizza il grafico a linee dell'andamento mensile
 function renderLineChart(data) {
   const byY={}; data.forEach(r=>{byY[r.ANNO]=byY[r.ANNO]||{}; byY[r.ANNO][r.MESE_ANNO]=(byY[r.ANNO][r.MESE_ANNO]||0)+r.INCASSO;});
   const mths=[...new Set(Object.values(byY).flatMap(Object.keys))].sort((a,b)=>{const[ma,ya]=a.split('/').map(Number),[mb,yb]=b.split('/').map(Number);return new Date(ya,ma-1)-new Date(yb,mb-1);});
   const trs=Object.entries(byY).map(([yr,obj])=>({ x:mths, y:mths.map(m=>obj[m]||0), mode:'lines+markers', name:yr }));
   Plotly.newPlot('line-chart', trs, {responsive:true, title:'Andamento Mensile Incassi per Anno', xaxis:{title:'Mese/Anno'}, yaxis:{title:'Incasso'}});
+}
+
+// NUOVA AGGIUNTA: Funzione per renderizzare il grafico con andamento giornaliero
+function renderDailyLineChart(data) {
+  // Se non ci sono dati, pulisce un eventuale grafico precedente
+  if (data.length === 0) {
+    Plotly.purge('daily-line-chart'); 
+    return;
+  }
+  
+  // Aggrega gli incassi per giorno. Usiamo RAWDATE ('YYYY-MM-DD') che è già ordinabile.
+  const byDay = {};
+  data.forEach(r => {
+    byDay[r.RAWDATE] = (byDay[r.RAWDATE] || 0) + r.INCASSO;
+  });
+
+  // Estrae le date e i totali, ordinando le date in modo cronologico
+  const dates = Object.keys(byDay).sort();
+  const dailyTotals = dates.map(date => byDay[date]);
+
+  // Crea la traccia per il grafico di Plotly
+  const trace = {
+    x: dates,
+    y: dailyTotals,
+    mode: 'lines', // 'lines' è più pulito per molti punti dati, ma puoi usare 'lines+markers'
+    name: 'Incasso Giornaliero',
+    line: {
+        color: 'rgb(255, 127, 14)', // Un colore diverso per distinguerlo
+        width: 2
+    }
+  };
+
+  // Imposta il layout del grafico
+  const layout = {
+    responsive: true,
+    title: 'Andamento Giornaliero Incassi',
+    xaxis: { title: 'Data' },
+    yaxis: { title: 'Incasso' }
+  };
+
+  // Disegna il grafico nel nuovo contenitore
+  Plotly.newPlot('daily-line-chart', [trace], layout);
 }
 </script>
 </body>
