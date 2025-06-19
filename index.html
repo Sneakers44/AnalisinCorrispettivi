@@ -52,13 +52,18 @@
         color: #007bff;
     }
     .kpi-card p {
-        margin: 4px 0;
+        margin: 8px 0;
         font-size: 1em;
         display: flex;
         justify-content: space-between;
     }
     .kpi-card p span:last-child {
         font-weight: bold;
+    }
+    .kpi-card hr {
+        border: none;
+        border-top: 1px solid #eee;
+        margin: 10px 0;
     }
     
     .analysis-container {
@@ -96,6 +101,7 @@
         border-radius: 4px;
         margin-bottom: 10px;
         display: none; /* Nascosto di default */
+        word-break: break-all;
     }
 
     @media (max-width: 768px) {
@@ -112,7 +118,6 @@
 <body>
   <h2>📊 Dashboard corrispettivi Store</h2>
   
-  <!-- Contenitore per i messaggi di errore -->
   <div id="error-container"></div>
 
   <input type="file" id="file-input" accept=".xlsx,.xlsm">
@@ -143,6 +148,7 @@
       <div id="line-chart"></div>
       <div id="daily-line-chart" style="margin-top: 40px;"></div>
       <div id="day-of-week-chart" style="margin-top: 40px;"></div>
+      <div id="traffic-dow-chart" style="margin-top: 40px;"></div>
   </div>
 
   <div id="kpi-section">
@@ -167,6 +173,7 @@
 
 <script>
 let globalData = [];
+let hasIngressiColumn = false;
 
 const formatCurrency = n => n.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' });
 const formatNumber = n => n.toLocaleString('it-IT', { minimumFractionDigits:2, maximumFractionDigits:2 });
@@ -176,76 +183,103 @@ document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = evt => {
-    // MODIFICA: Nasconde il box di errore all'inizio di ogni caricamento
     const errorContainer = document.getElementById('error-container');
     errorContainer.style.display = 'none';
     errorContainer.textContent = '';
 
-    const data = new Uint8Array(evt.target.result);
-    const wb = XLSX.read(data, { type:'array' });
-    const sheetName = 'REPORT CHIUSURA GIORNALIERA';
-    const sh = wb.Sheets[sheetName];
-    if (!sh) {
-      // MODIFICA: Mostra l'errore sulla pagina invece di usare alert()
-      errorContainer.textContent = `Errore: Foglio "${sheetName}" non trovato nel file Excel.`;
-      errorContainer.style.display = 'block';
-      return; 
-    }
-    
-    const rows = XLSX.utils.sheet_to_json(sh, { defval:'' });
-    
-    const giorniSettimana = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
-    
-    globalData = rows.map(rw => {
-      let dt;
-      const rawDate = rw['DATACORRISPETTIVO'];
+    try {
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type:'array' });
+        
+        const targetSheetName = 'REPORT CHIUSURA GIORNALIERA';
+        let sheetName = wb.SheetNames.find(name => name.trim().toUpperCase() === targetSheetName) || wb.SheetNames[0];
 
-      if (rawDate instanceof Date) {
-          dt = rawDate;
-      } else if (typeof rawDate === 'number' && rawDate > 1) {
-          dt = new Date((rawDate - 25569) * 86400 * 1000);
-      } else if (typeof rawDate === 'string') {
-          const parts = rawDate.split(/[-/]/);
-          if (parts.length === 3) {
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const year = parseInt(parts[2], 10);
-            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-               dt = new Date(year, month, day);
-            }
+        const sh = wb.Sheets[sheetName];
+        if (!sh) {
+          throw new Error(`Impossibile trovare il foglio di lavoro "${targetSheetName}".`);
+        }
+        
+        const rows = XLSX.utils.sheet_to_json(sh, { defval:null });
+        
+        if (rows.length === 0) {
+            throw new Error("Il file non contiene righe di dati valide.");
+        }
+
+        const findKey = (row, target) => {
+            const upperTarget = target.toUpperCase().replace(/\s/g, '');
+            return Object.keys(row).find(key => key.trim().toUpperCase().replace(/\s/g, '') === upperTarget);
+        };
+        
+        const firstRow = rows[0] || {};
+        const dateKey = findKey(firstRow, 'DATACORRISPETTIVO');
+        const storeKey = findKey(firstRow, 'STORE');
+        const insegnaKey = findKey(firstRow, 'INSEGNA');
+        const incassoKey = findKey(firstRow, 'TOTALEGIORNOVENDITE');
+        const scontriniKey = findKey(firstRow, 'NUMERODOCUMENTICOMMERCIALI');
+        const ingressiKey = findKey(firstRow, 'NUMEROINGRESSINELLOSTORE');
+
+        hasIngressiColumn = !!ingressiKey;
+
+        if (!dateKey) {
+            throw new Error("Errore critico: La colonna 'DATACORRISPETTIVO' non è stata trovata.");
+        }
+
+        const giorniSettimana = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+        
+        globalData = rows.map(rw => {
+          let dt;
+          const rawDate = rw[dateKey];
+
+          if (rawDate instanceof Date) {
+              dt = rawDate;
+          } else if (typeof rawDate === 'number' && rawDate > 1) {
+              dt = new Date((rawDate - 25569) * 86400 * 1000);
+          } else if (typeof rawDate === 'string') {
+              const parts = rawDate.split(/[-/]/);
+              if (parts.length === 3) {
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                let year = parseInt(parts[2], 10);
+                if(year < 100) year += 2000;
+                if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+                   dt = new Date(year, month, day);
+                }
+              }
           }
-      }
 
-      if (!dt || isNaN(dt.getTime())) {
-        console.warn("Riga saltata: 'DATACORRISPETTIVO' non è una data valida.", rw);
-        return null;
-      }
-      
-      const dd=String(dt.getDate()).padStart(2,'0'), mm=String(dt.getMonth()+1).padStart(2,'0'), yy=dt.getFullYear();
-      return { 
-        DATA: `${dd}/${mm}/${yy}`, 
-        RAWDATE: `${yy}-${mm}-${dd}`, 
-        MESE_ANNO: `${mm}/${yy}`, 
-        ANNO: `${yy}`, 
-        STORE: rw['STORE'], 
-        INSEGNA: rw['INSEGNA'], 
-        INCASSO: parseFloat(rw['TOTALEGIORNOVENDITE'])||0, 
-        SCONTRINI: parseInt(rw['NUMERODOCUMENTICOMMERCIALI'])||0,
-        GIORNO_SETTIMANA_INDICE: dt.getDay(),
-        GIORNO_SETTIMANA_NOME: giorniSettimana[dt.getDay()]
-      };
-    }).filter(Boolean);
-    
-    if(globalData.length === 0) {
-        // MODIFICA: Mostra l'errore sulla pagina invece di usare alert()
-        errorContainer.textContent = "Nessun dato valido trovato nel file. Controlla che la colonna 'DATACORRISPETTIVO' sia presente e contenga date corrette.";
+          if (!dt || isNaN(dt.getTime())) {
+            return null;
+          }
+          
+          const dd=String(dt.getDate()).padStart(2,'0'), mm=String(dt.getMonth()+1).padStart(2,'0'), yy=dt.getFullYear();
+          return { 
+            DATA: `${dd}/${mm}/${yy}`, 
+            RAWDATE: `${yy}-${mm}-${dd}`, 
+            MESE_ANNO: `${mm}/${yy}`, 
+            ANNO: `${yy}`, 
+            STORE: rw[storeKey], 
+            INSEGNA: rw[insegnaKey], 
+            INCASSO: parseFloat(rw[incassoKey])||0, 
+            SCONTRINI: parseInt(rw[scontriniKey])||0,
+            INGRESSI: ingressiKey && rw[ingressiKey] ? (parseFloat(rw[ingressiKey])||0) : 0,
+            GIORNO_SETTIMANA_INDICE: dt.getDay(),
+            GIORNO_SETTIMANA_NOME: giorniSettimana[dt.getDay()]
+          };
+        }).filter(Boolean);
+        
+        if(globalData.length === 0) {
+            throw new Error("Nessun dato valido trovato dopo l'analisi del file. Controllare che le righe contengano valori corretti.");
+        }
+
+        showUI();
+    } catch (err) {
+        errorContainer.textContent = err.message;
         errorContainer.style.display = 'block';
     }
-
-    showUI();
   };
   reader.readAsArrayBuffer(file);
 });
+
 
 function showUI() {
   document.getElementById('filters').style.display='block';
@@ -254,9 +288,9 @@ function showUI() {
 }
 
 function populateFilters() {
-  const years = [...new Set(globalData.map(d=>d.ANNO))].sort();
-  const insegne = [...new Set(globalData.map(d=>d.INSEGNA))].sort();
-  const stores = [...new Set(globalData.map(d=>d.STORE))].sort();
+  const years = [...new Set(globalData.map(d=>d.ANNO))].filter(Boolean).sort();
+  const insegne = [...new Set(globalData.map(d=>d.INSEGNA))].filter(Boolean).sort();
+  const stores = [...new Set(globalData.map(d=>d.STORE))].filter(Boolean).sort();
   document.getElementById('year-filter').innerHTML='<option value="">Anno</option>'+years.map(y=>`<option>${y}</option>`).join('');
   document.getElementById('insegna-filter').innerHTML='<option value="">Insegna</option>'+insegne.map(i=>`<option>${i}</option>`).join('');
   document.getElementById('store-filter').innerHTML='<option value="">Store</option>'+stores.map(s=>`<option>${s}</option>`).join('');
@@ -264,7 +298,7 @@ function populateFilters() {
   document.getElementById('insegna-filter').onchange = () => {
     const sel = document.getElementById('insegna-filter').value;
     const fl = sel?globalData.filter(d=>d.INSEGNA===sel):globalData;
-    const sts=[...new Set(fl.map(d=>d.STORE))].sort();
+    const sts=[...new Set(fl.map(d=>d.STORE))].filter(Boolean).sort();
     document.getElementById('store-filter').innerHTML='<option value="">Store</option>'+sts.map(s=>`<option>${s}</option>`).join('');
   };
 }
@@ -287,6 +321,7 @@ function applyFilters() {
   renderLineChart(data);
   renderDailyLineChart(data);
   renderDayOfWeekChart(data);
+  renderTrafficByDayOfWeekChart(data);
   renderKpiSection(data);
   renderTopFlopDays(data);
   renderYoYComparison(filters);
@@ -338,10 +373,10 @@ function renderTable(data) {
   const g={}; data.forEach(r=>{g[r.INSEGNA]=g[r.INSEGNA]||{}; g[r.INSEGNA][r.STORE]=g[r.INSEGNA][r.STORE]||[]; g[r.INSEGNA][r.STORE].push(r); ti+=r.INCASSO; td+=r.SCONTRINI;});
   Object.entries(g).forEach(([ins,st])=>{
     const di=document.createElement('details'); di.className='insegna'; const si=Object.values(st).flat().reduce((s,r)=>s+r.INCASSO,0); const dii=Object.values(st).flat().reduce((s,r)=>s+r.SCONTRINI,0);
-    di.innerHTML=`<summary><div><strong>${ins}</strong></div><div>🧾 ${formatInt(dii)}</div><div>💶 ${formatCurrency(si)}</div></summary>`;
+    di.innerHTML=`<summary><div><strong>${ins || 'N/D'}</strong></div><div>🧾 ${formatInt(dii)}</div><div>💶 ${formatCurrency(si)}</div></summary>`;
     Object.entries(st).forEach(([s,rows])=>{
       const ds=document.createElement('details'); ds.className='store'; const ss=rows.reduce((s,r)=>s+r.INCASSO,0); const dss=rows.reduce((s,r)=>s+r.SCONTRINI,0);
-      ds.innerHTML=`<summary><div><strong>${s}</strong></div><div>🧾 ${formatInt(dss)}</div><div>💶 ${formatCurrency(ss)}</div></summary>`;
+      ds.innerHTML=`<summary><div><strong>${s || 'N/D'}</strong></div><div>🧾 ${formatInt(dss)}</div><div>💶 ${formatCurrency(ss)}</div></summary>`;
       const wrapper=document.createElement('div'); wrapper.className='table-wrapper'; const tbl=document.createElement('table'); tbl.innerHTML=`<thead><tr><th>Data</th><th>Scontrini</th><th>Incasso</th></tr></thead><tbody></tbody>`;
       rows.forEach(r=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${r.DATA}</td><td>${formatInt(r.SCONTRINI)}</td><td>${formatCurrency(r.INCASSO)}</td>`; tbl.querySelector('tbody').appendChild(tr);});
       wrapper.appendChild(tbl); ds.appendChild(wrapper); di.appendChild(ds);
@@ -372,20 +407,49 @@ function renderKpiSection(data) {
     container.innerHTML = '';
     const byStore = {};
     data.forEach(row => {
-        if (!byStore[row.STORE]) { byStore[row.STORE] = { incassoTotale: 0, scontriniTotali: 0, giorniAttivita: new Set() }; }
+        if (!row.STORE) return;
+        if (!byStore[row.STORE]) { 
+            byStore[row.STORE] = { incassoTotale: 0, scontriniTotali: 0, ingressiTotali: 0, giorniAttivita: new Set() }; 
+        }
         byStore[row.STORE].incassoTotale += row.INCASSO;
         byStore[row.STORE].scontriniTotali += row.SCONTRINI;
+        byStore[row.STORE].ingressiTotali += row.INGRESSI;
         byStore[row.STORE].giorniAttivita.add(row.RAWDATE);
     });
     const sortedStores = Object.entries(byStore).sort(([, a], [, b]) => b.incassoTotale - a.incassoTotale);
     for (const [storeName, storeData] of sortedStores) {
-        const { incassoTotale, scontriniTotali } = storeData;
+        if (!storeName || storeName === 'undefined') continue;
+        const { incassoTotale, scontriniTotali, ingressiTotali } = storeData;
         const numGiorniAttivita = storeData.giorniAttivita.size;
         const scontrinoMedio = scontriniTotali > 0 ? incassoTotale / scontriniTotali : 0;
         const incassoMedioGiornaliero = numGiorniAttivita > 0 ? incassoTotale / numGiorniAttivita : 0;
+        
+        let conversionKpisHTML = '';
+        if (hasIngressiColumn) {
+            if (ingressiTotali > 0) {
+                const tassoConversione = (scontriniTotali / ingressiTotali) * 100;
+                const valorePerVisitatore = incassoTotale / ingressiTotali;
+                conversionKpisHTML = `
+                    <hr>
+                    <p><span>Tasso Conversione:</span> <span>${tassoConversione.toFixed(2)}%</span></p>
+                    <p><span>Valore per Visitatore:</span> <span>${formatCurrency(valorePerVisitatore)}</span></p>
+                `;
+            } else {
+                conversionKpisHTML = `<hr><p><span>Tasso Conversione:</span> <span>Dati non disponibili</span></p>`;
+            }
+        }
+
+
         const card = document.createElement('div');
         card.className = 'kpi-card';
-        card.innerHTML = `<h4>${storeName}</h4><p><span>Incasso Totale:</span> <span>${formatCurrency(incassoTotale)}</span></p><p><span>Scontrino Medio:</span> <span>${formatCurrency(scontrinoMedio)}</span></p><p><span>Giorni di Attività:</span> <span>${numGiorniAttivita}</span></p><p><span>Incasso Medio Giornaliero:</span> <span>${formatCurrency(incassoMedioGiornaliero)}</span></p>`;
+        card.innerHTML = `
+            <h4>${storeName}</h4>
+            <p><span>Incasso Totale:</span> <span>${formatCurrency(incassoTotale)}</span></p>
+            <p><span>Scontrino Medio:</span> <span>${formatCurrency(scontrinoMedio)}</span></p>
+            <p><span>Giorni di Attività:</span> <span>${numGiorniAttivita}</span></p>
+            <p><span>Incasso Medio Giornaliero:</span> <span>${formatCurrency(incassoMedioGiornaliero)}</span></p>
+            ${conversionKpisHTML}
+        `;
         container.appendChild(card);
     }
 }
@@ -399,6 +463,39 @@ function renderDayOfWeekChart(data) {
     const layout = { responsive: true, title: 'Incasso Totale per Giorno della Settimana', xaxis: { title: 'Giorno della Settimana' }, yaxis: { title: 'Incasso Totale' } };
     Plotly.newPlot(container, [trace], layout);
 }
+
+function renderTrafficByDayOfWeekChart(data) {
+    const container = document.getElementById('traffic-dow-chart');
+    
+    if (!hasIngressiColumn) {
+        container.style.display = 'none';
+        Plotly.purge(container);
+        return;
+    }
+
+    container.style.display = 'block';
+    container.innerHTML = ''; 
+
+    const totalsByDay = [ { day: 'Lunedì', total: 0 }, { day: 'Martedì', total: 0 }, { day: 'Mercoledì', total: 0 }, { day: 'Giovedì', total: 0 }, { day: 'Venerdì', total: 0 }, { day: 'Sabato', total: 0 }, { day: 'Domenica', total: 0 } ];
+    let totalIngressi = 0;
+    data.forEach(row => { 
+        if(typeof row.GIORNO_SETTIMANA_INDICE === 'number' && row.INGRESSI > 0) {
+           const index = row.GIORNO_SETTIMANA_INDICE === 0 ? 6 : row.GIORNO_SETTIMANA_INDICE - 1; 
+           totalsByDay[index].total += row.INGRESSI;
+           totalIngressi += row.INGRESSI;
+        }
+    });
+    
+    if (totalIngressi === 0) {
+        container.innerHTML = `<div class="dod-nodata">Nessun dato sugli ingressi disponibile per il periodo/filtro selezionato.</div>`;
+        return;
+    }
+
+    const trace = { x: totalsByDay.map(d => d.day), y: totalsByDay.map(d => d.total), type: 'bar', marker: { color: '#17a2b8' } };
+    const layout = { responsive: true, title: 'Traffico Totale per Giorno della Settimana', xaxis: { title: 'Giorno della Settimana' }, yaxis: { title: 'Numero Ingressi' } };
+    Plotly.newPlot(container, [trace], layout);
+}
+
 
 function renderTopFlopDays(data) {
     const topContainer = document.getElementById('top-days-container');
